@@ -1,6 +1,3 @@
-import math
-import matplotlib.pyplot as plt
-
 def calculate_thc_concentration(
     gender: str, age_years: int, weight_kg: float, body_fat_percent: float,
     months_of_consumption: float, daily_dose_grams: float, thc_percent: float,
