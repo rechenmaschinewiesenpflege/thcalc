@@ -198,9 +198,9 @@ if __name__ == "__main__":
 
     res_current = run_sim(hours)
 
-    # --- Find exact time when THC drops below 3.5 ng/ml (Mean, Lower CI, Upper CI) ---
+    # --- Find exact time when THC drops below 3.5 ng/ml in a 30-day window ---
     sub_35_mean, sub_35_low, sub_35_up = None, None, None
-    for test_h in range(int(hours), 90 * 24 + 1):
+    for test_h in range(int(hours), 30 * 24 + 1):
         r = run_sim(float(test_h))
         if sub_35_mean is None and r['Total_THC_ng_ml'] < 3.5: sub_35_mean = test_h
         if sub_35_low is None and r['THC_CI_Lower'] < 3.5: sub_35_low = test_h
@@ -216,8 +216,11 @@ if __name__ == "__main__":
     
     print("\n🚗 GERMAN DRIVING LIMIT (3.5 ng/ml) - Time to reach:")
     if sub_35_mean: print(f"   • Expected Mean: ~{round(sub_35_mean/24.0, 1)} days ({sub_35_mean} hours)")
+    else: print("   • Expected Mean: Not reached within 30 days.")
+    
     if sub_35_low:  print(f"   • Best Case (Lower CI): ~{round(sub_35_low/24.0, 1)} days")
     if sub_35_up:   print(f"   • Worst Case (Upper CI): ~{round(sub_35_up/24.0, 1)} days")
+    elif not sub_35_mean: print("   • Worst Case: Not reached within 30 days.")
 
     print(f"\n📊 Model Statistics & Predictivity:")
     print(f"   • Inter-Individual Variability (\u03C3): {round(res_current['RSD_Applied'], 1)}%")
@@ -230,7 +233,8 @@ if __name__ == "__main__":
     thc_vals, thc_low, thc_high = [], [], []
     cooh_vals, cooh_low, cooh_high = [], [], []
     
-    for h in range(0, 90 * 24 + 1, 12):
+    # Calculate points every 6 hours up to 30 days for better resolution
+    for h in range(0, 30 * 24 + 1, 6):
         res = run_sim(h)
         days.append(h / 24.0)
         thc_vals.append(res['Total_THC_ng_ml'])
@@ -241,7 +245,7 @@ if __name__ == "__main__":
         cooh_high.append(res['COOH_CI_Upper'])
 
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
-    fig.canvas.manager.set_window_title('Your Personal THC Clearance Journey')
+    fig.canvas.manager.set_window_title('Your Personal THC Clearance Journey (30 Days)')
 
     # Subplot 1: Active THC
     ax1.plot(days, thc_vals, label="Active THC (Mean)", color="#d62728", linewidth=2)
@@ -252,7 +256,7 @@ if __name__ == "__main__":
         ax1.axvline(x=sub_35_mean/24.0, color='green', linestyle=':', linewidth=2, label=f"Mean Reached (~{round(sub_35_mean/24.0, 1)}d)")
 
     ax1.set_ylabel("ng/ml (Blood Serum)")
-    ax1.set_title("Active THC, Confidence Intervals & German Driving Limit (90 Days)")
+    ax1.set_title("Active THC, Confidence Intervals & German Driving Limit (30 Days)")
     ax1.grid(True, linestyle="--", alpha=0.6)
     ax1.legend(loc='upper right', fontsize=9)
     
@@ -264,10 +268,10 @@ if __name__ == "__main__":
     ax2.fill_between(days, cooh_low, cooh_high, color="#1f77b4", alpha=0.2, label="95% Confidence Interval (Bounds)")
     ax2.set_xlabel("Days since you stopped")
     ax2.set_ylabel("ng/ml (Blood Serum)")
-    ax2.set_title("Inactive Metabolite (THC-COOH) Over 90 Days")
+    ax2.set_title("Inactive Metabolite (THC-COOH) Over 30 Days")
     ax2.grid(True, linestyle="--", alpha=0.6)
     ax2.legend(loc='upper right', fontsize=9)
-    ax2.set_xlim(0, 90)
+    ax2.set_xlim(0, 30)
     ax2.set_ylim(0, max(cooh_vals) * 1.2)
 
     plt.tight_layout()
