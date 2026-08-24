@@ -1,4 +1,4 @@
-Run these two:
+Before running the script on Linux, run these two:
 
 mkdir -p ~/my_project && cd ~/my_project && git init
 
