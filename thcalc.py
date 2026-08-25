@@ -1,275 +1,359 @@
-def calculate_thc_concentration(
-    gender: str, age_years: int, weight_kg: float, body_fat_percent: float,
-    months_of_consumption: float, daily_dose_grams: float, thc_percent: float,
-    product_source: int, daily_frequency: int, consumption_method: str,
-    inhalation_style: int, activity_level: int, cyp2c9_score: float,
-    cbd_level: int, med_mod: float, weight_trend: int, hours_since_last: float
-) -> dict:
+import math
+
+def simulate_thc_clearance(
+    gender, age, weight, height, body_fat, activity, weight_trend, hydration, diet,
+    years_used, days_per_week, grams_per_day, last_break, product_source,
+    method, tobacco_mix, alcohol_mix, thc_percent, cbd_level, dose_amount,
+    drag_size, hold_time, session_duration,
+    high_duration, edible_sens, grogginess, fasting_state,
+    med_list, post_activity
+):
+    # --- 1. CLINICALLY SCALED BIOMETRICS ---
+    if body_fat <= 0:
+        bmi = weight / ((height / 100) ** 2)
+        gender_factor = 1 if gender == "m" else 0
+        body_fat = max(5.0, (1.20 * bmi) + (0.23 * age) - (10.8 * gender_factor) - 5.4)
     
-    # --- Internal Math ---
-    actual_thc_percent = thc_percent if product_source == 1 else thc_percent * 0.75
-    daily_dose_mg = daily_dose_grams * 1000
-    thc_mg_per_day = daily_dose_mg * (actual_thc_percent / 100)
-    single_dose_mg = thc_mg_per_day / max(1, daily_frequency)
+    # Apparent Initial Distribution Volume (V1_apparent)
+    v1_apparent = weight * 0.80 * {1: 1.05, 2: 1.0, 3: 0.9}.get(hydration, 1.0) 
+
+    # --- 2. ENZYME PHENOTYPING (CYP2C9 / CYP3A4 Proxies) ---
+    cyp_score = 3.0
+    cyp_score += {1: -1.0, 2: -0.5, 3: 0, 4: 0.5, 5: 1.0}.get(high_duration, 0)
+    cyp_score += {1: 1.0, 2: 0.5, 3: 0, 4: -0.5, 5: -1.0}.get(edible_sens, 0)
+    cyp_score += {1: -1.0, 2: -0.5, 3: 0, 4: 0.5, 5: 1.0}.get(grogginess, 0)
+    cyp_phenotype = max(1.0, min(5.0, cyp_score))
+
+    # --- 3. BIOAVAILABILITY (F) & ABSORPTION ---
+    f = 0.0
+    ka = 12.0
+    if method == 1: f = 0.25      
+    elif method == 2: f = 0.30    
+    elif method == 3: f = 0.40    
+    elif method == 4: f = 0.45    
+    elif method == 5: f = 0.10    
+    elif method == 6: f = 0.20    
     
-    base_f = {"smoking": 0.25, "vaping": 0.40, "oral": 0.10}.get(consumption_method, 0.25)
-    if consumption_method in ["smoking", "vaping"]:
-        inhale_mod = {1: 0.6, 2: 1.0, 3: 1.4}.get(inhalation_style, 1.0)
-        f = min(0.50, base_f * inhale_mod)
+    if method in [1, 2, 3, 4]:
+        f *= {1: 0.7, 2: 1.0, 3: 1.3}.get(drag_size, 1.0)
+        f *= {1: 0.8, 2: 1.0, 3: 1.2, 4: 1.4}.get(hold_time, 1.0)
+        if tobacco_mix == 1: f *= 0.85 
+        if alcohol_mix == 1: f *= 1.20 
     else:
-        f = base_f
-
-    absorbed_thc_mg_acute = single_dose_mg * f
-    absorbed_thc_mg_daily = thc_mg_per_day * f
-
-    fat_mass_kg = weight_kg * (body_fat_percent / 100)
-    lean_mass_kg = weight_kg - fat_mass_kg
-    vd_factor_lean = 3.2 if gender == "m" else 2.9
-    vd_liters = (lean_mass_kg * vd_factor_lean) + (fat_mass_kg * 20)
-    
-    c_max_ng_ml_acute = (absorbed_thc_mg_acute / vd_liters) * 1000
-
-    mod_metabolism = {1: 1.2, 2: 1.1, 3: 1.0, 4: 0.9, 5: 0.8}.get(activity_level, 1.0)
-    
-    if cyp2c9_score <= 50:
-        base_mod_cyp = 1.8 - (cyp2c9_score / 50.0) * 0.8  
-    else:
-        base_mod_cyp = 1.0 - ((cyp2c9_score - 50) / 50.0) * 0.4 
-
-    cbd_mod = {1: 1.4, 2: 1.15, 3: 1.0}.get(cbd_level, 1.0)
-    mod_cyp = base_mod_cyp * cbd_mod * med_mod
-
-    trend_mods = {1: (0.8, 0.30), 2: (1.0, 0.35), 3: (1.3, 0.40), 4: (1.8, 0.50)}
-    mod_lipolysis, rsd = trend_mods.get(weight_trend, (1.0, 0.35))
-
-    half_life_alpha_h = 0.5 * mod_cyp
-    k_alpha = math.log(2) / half_life_alpha_h
-    
-    half_life_beta_h = (30 + (body_fat_percent * 1.5)) * mod_metabolism * (1.0 + (mod_cyp - 1.0) * 0.5)
-    k_beta = math.log(2) / half_life_beta_h
-    
-    concentration_acute = c_max_ng_ml_acute * (
-        0.85 * math.exp(-k_alpha * hours_since_last) + 
-        0.15 * math.exp(-k_beta * hours_since_last)
-    )
-
-    saturation_factor = min(months_of_consumption / 2.0, 1.0) 
-    baseline_ng_ml = (absorbed_thc_mg_daily / 50) * saturation_factor * (body_fat_percent / 15) * mod_metabolism * mod_cyp * mod_lipolysis
-    current_baseline = baseline_ng_ml * math.exp(-(math.log(2) / (half_life_beta_h * 2)) * hours_since_last)
-
-    total_concentration_ng_ml = concentration_acute + current_baseline
-
-    half_life_cooh_h = 120 * mod_metabolism
-    k_cooh = math.log(2) / half_life_cooh_h
-    cooh_max = c_max_ng_ml_acute * 4.5 * (1.0 if cyp2c9_score >= 50 else 0.7)
-    cooh_baseline = (absorbed_thc_mg_daily / 5) * saturation_factor * mod_lipolysis
-    
-    cooh_total = (cooh_max * math.exp(-k_cooh * hours_since_last)) + \
-                 (cooh_baseline * math.exp(-k_cooh * hours_since_last))
-
-    thc_standard_error = total_concentration_ng_ml * rsd
-    thc_ci_lower = max(0.0, total_concentration_ng_ml - (1.96 * thc_standard_error))
-    thc_ci_upper = total_concentration_ng_ml + (1.96 * thc_standard_error)
-
-    cooh_rsd = rsd * 0.85 
-    cooh_standard_error = cooh_total * cooh_rsd
-    cooh_ci_lower = max(0.0, cooh_total - (1.96 * cooh_standard_error))
-    cooh_ci_upper = cooh_total + (1.96 * cooh_standard_error)
-
-    return {
-        "Total_THC_ng_ml": total_concentration_ng_ml,
-        "THC_CI_Lower": thc_ci_lower,
-        "THC_CI_Upper": thc_ci_upper,
-        "THC_COOH_Metabolite_ng_ml": cooh_total,
-        "COOH_CI_Lower": cooh_ci_lower,
-        "COOH_CI_Upper": cooh_ci_upper,
-        "Effective_Beta_Half_Life_h": half_life_beta_h,
-        "RSD_Applied": rsd * 100
-    }
-
-# --- Friendly Input Helpers ---
-def get_float(prompt: str, default: float) -> float:
-    e = input(f"{prompt} [Default: {default}]: ").strip().replace(",", ".")
-    if not e: return default
-    try: return float(e)
-    except: return default
-
-def get_int(prompt: str, default: int) -> int:
-    e = input(f"{prompt} [Default: {default}]: ").strip()
-    if not e: return default
-    try: return int(e)
-    except: return default
-
-def determine_cyp_score():
-    print("\n--- Your Natural Tolerance (Liver Enzymes) ---")
-    print("1. How long does the 'high' usually last for you compared to your friends?")
-    print("   [1] Extremely long | [3] Average | [5] Extremely short")
-    q1 = get_int("Your choice (1-5)", 3)
-    print("2. Do you get a 'weed hangover' the morning after?")
-    print("   [1] Almost always | [3] Average | [5] Never")
-    q2 = get_int("Your choice (1-5)", 3)
-    print("3. How strongly do small amounts hit you?")
-    print("   [1] Extremely strong | [3] Normal | [5] Extremely weak")
-    q3 = get_int("Your choice (1-5)", 3)
-    
-    q1, q2, q3 = max(1, min(5, q1)), max(1, min(5, q2)), max(1, min(5, q3))
-    points = {1: 0, 2: 25, 3: 50, 4: 75, 5: 100}
-    score = (points[q1] + points[q2] + points[q3]) / 3.0
-    return score
-
-def get_medication_modifier():
-    cumulative_mod = 1.0
-    added_meds = []
-    print("\n--- Detailed Medication Survey ---")
-    while True:
-        print("\nDo you take medications affecting liver enzymes (CYP2C9/3A4)?")
-        print("   [1] Antidepressants (Prozac, etc.)")
-        print("   [2] Antibiotics / Antifungals (Ketoconazole, Rifampin, etc.)")
-        print("   [3] Heart / Blood pressure / Blood thinners")
-        print("   [4] Seizure / Neurology meds")
-        print("   [5] Stomach / Acid Reflux (Omeprazole, etc.)")
-        print("   [6] Herbal Supplements (St. John's Wort, etc.)")
-        print("   [7] I'm done adding medications")
+        if fasting_state == 1: ka = 1.5; f *= 0.8 
+        elif fasting_state == 2: ka = 1.0; f *= 1.0
+        elif fasting_state == 3: ka = 0.6; f *= 1.4 
         
-        cat = get_int("Your choice (1-7)", 7)
-        if cat == 7: break
-        elif cat == 1:
-            if get_int("   [1] Prozac/Fluvoxamine, [2] Valproic Acid, [3] Zoloft: ", 1) in [1, 2]:
-                cumulative_mod *= 1.5; added_meds.append("Antidepressant/Mood Stabilizer")
-            else: cumulative_mod *= 1.2; added_meds.append("Zoloft/Paroxetine")
-        elif cat == 2:
-            c = get_int("   [1] Strong Antifungal, [2] Macrolide Antibiotic, [3] Rifampin (Inducer): ", 1)
-            if c in [1, 2]: cumulative_mod *= 2.0; added_meds.append("Antifungal/Antibiotic")
-            elif c == 3: cumulative_mod *= 0.5; added_meds.append("Rifampin")
-        elif cat == 3:
-            cumulative_mod *= 1.5; added_meds.append("Heart/Blood Thinner Med")
-        elif cat == 4:
-            cumulative_mod *= 0.5; added_meds.append("Anticonvulsant")
-        elif cat == 5:
-            cumulative_mod *= 1.2; added_meds.append("Acid Reflux Med")
-        elif cat == 6:
-            cumulative_mod *= 0.5; added_meds.append("St. John's Wort")
+    actual_thc_percent = thc_percent * (0.85 if product_source == 2 else 1.0)
+    dose_mg = dose_amount * 1000 * (actual_thc_percent / 100.0)
+    absorbed_mcg = dose_mg * f * 1000
 
-        cumulative_mod = max(0.33, min(3.0, cumulative_mod))
-        if added_meds: print(f"✅ Logged: {added_meds[-1]}")
-    return cumulative_mod
+    # --- 4. CALIBRATED TRI-EXPONENTIAL CONSTANTS ---
+    alpha = math.log(2) / 0.15 
+    
+    # Beta: Hepatic clearance
+    base_t_half_beta = 3.0 - (cyp_phenotype - 3.0) * 0.4 
+    
+    # CBD competitive inhibition
+    if cbd_level == 1: base_t_half_beta *= 1.3 
+    elif cbd_level == 2: base_t_half_beta *= 1.15
+    
+    # Aggregate Medication Modifiers from Loop
+    med_warnings = []
+    med_factor = 1.0
+    
+    # Medication Database Mapping
+    # Category 1: Strong CYP2C9 Inhibitors
+    if 1 in med_list or 2 in med_list or 3 in med_list or 4 in med_list:
+        med_factor *= 1.60
+        med_warnings.append("Strong CYP2C9 Inhibitor detected (Fluconazole/Valproate/Amiodarone/Miconazole). Clearance heavily delayed.")
+        
+    # Category 2: Moderate / Mild CYP2C9 Inhibitors
+    if 5 in med_list or 6 in med_list or 7 in med_list:
+        med_factor *= 1.25
+        med_warnings.append("Moderate CYP2C9 Inhibitor detected (Fluvoxamine/Sertraline/Omeprazole). Clearance moderately delayed.")
+        
+    # Category 3: Strong CYP3A4 Inhibitors
+    if 8 in med_list or 9 in med_list or 10 in med_list:
+        med_factor *= 1.40
+        med_warnings.append("Strong CYP3A4 Inhibitor detected (Ketoconazole/Clarithromycin/Grapefruit Extract). Secondary clearance pathway blocked.")
+        
+    # Category 4: Strong Enzyme Inducers
+    if 11 in med_list or 12 in med_list or 13 in med_list or 14 in med_list:
+        med_factor *= 0.55
+        med_warnings.append("Strong Hepatic Inducer detected (St. John's Wort/Rifampin/Carbamazepine/Phenytoin). Clearance heavily accelerated.")
+
+    base_t_half_beta *= med_factor
+    beta = math.log(2) / base_t_half_beta
+    
+    # Gamma: Terminal lipid release half-life
+    terminal_days = 3.0 + (body_fat / 10.0) + min(4.0, (years_used * days_per_week) / 10.0)
+    gamma = math.log(2) / (terminal_days * 24.0)
+
+    # Re-balanced Coefficients (90% distributes rapidly to tissues)
+    C0 = absorbed_mcg / v1_apparent
+    A = C0 * 0.90      
+    B = C0 * 0.085     
+    C_acute = C0 * 0.015 
+
+    # --- 5. CHRONIC LIPID BASELINE (C_chronic) ---
+    chronicity_factor = min(1.0, years_used / 3.0) * (days_per_week / 7.0)
+    daily_mg = grams_per_day * 1000 * (actual_thc_percent / 100.0) * f
+    break_reduction = max(0.0, 1.0 - (last_break / 30.0))
+    
+    lipid_storage_mg = daily_mg * chronicity_factor * break_reduction * (body_fat / 15.0)
+    baseline_c0 = lipid_storage_mg / (weight * 0.5) 
+    
+    lipolysis_mod = 1.0
+    if weight_trend == 1: lipolysis_mod *= 1.3 
+    elif weight_trend == 3: lipolysis_mod *= 0.8 
+    if post_activity == 3: lipolysis_mod *= 1.5 
+    elif post_activity == 1: lipolysis_mod *= 0.9
+    
+    baseline_c0 *= lipolysis_mod
+    C_terminal_total = C_acute + baseline_c0
+
+    # --- 6. TIMELINE SIMULATION (30 DAYS) ---
+    simulation_hours = 30 * 24 
+    timeline = []
+    threshold_hour = -1.0
+    
+    rsd = 0.25 + (0.10 if product_source == 2 else 0)
+
+    for step in range(1, (simulation_hours * 2) + 1): 
+        t = step / 2.0
+        
+        absorption_factor = (ka / (ka - alpha)) if ka != alpha else 1.0
+        
+        conc = absorption_factor * (
+            A * math.exp(-alpha * t) + 
+            B * math.exp(-beta * t) + 
+            C_terminal_total * math.exp(-gamma * t)
+        ) - (C0 * math.exp(-ka * t))
+        
+        conc = max(0.0, conc)
+        
+        ci_lower = max(0.0, conc * (1.0 - 1.96 * rsd))
+        ci_upper = conc * (1.0 + 1.96 * rsd)
+        
+        timeline.append({"hour": t, "conc": conc, "lower": ci_lower, "upper": ci_upper})
+        
+        if threshold_hour == -1.0 and conc < 3.5:
+            threshold_hour = t
+
+    return timeline, threshold_hour, rsd, cyp_phenotype, f, C0, baseline_c0, med_warnings
+
+
+def run_medication_questionnaire():
+    """Interactive loop to collect all relevant interacting medications."""
+    med_catalog = {
+        1: "Fluconazole / Diflucan (Antifungal - Strong CYP2C9 Inhibitor)",
+        2: "Valproic Acid / Depakote (Antiepileptic / Mood Stabilizer - Strong CYP2C9 Inhibitor)",
+        3: "Amiodarone / Cordarone (Antiarrhythmic - Strong CYP2C9 Inhibitor)",
+        4: "Miconazole / Voriconazole (Antifungals - Strong CYP2C9 Inhibitors)",
+        5: "Fluvoxamine / Luvox (SSRI Antidepressant - Moderate CYP2C9 Inhibitor)",
+        6: "Sertraline / Zoloft (SSRI Antidepressant - Mild/Moderate CYP2C9 Inhibitor)",
+        7: "Omeprazole / Pantoprazole / Cimetidine (PPIs / Acid Reducers - Mild CYP2C9 Inhibitor)",
+        8: "Ketoconazole / Itraconazole (Antifungals - Strong CYP3A4 Inhibitors)",
+        9: "Clarithromycin / Erythromycin (Macrolide Antibiotics - Strong CYP3A4 Inhibitors)",
+        10: "Grapefruit Juice Extract / High Regular Consumption (CYP3A4 Intestinal Inhibitor)",
+        11: "St. John's Wort / Johanniskraut (Herbal Antidepressant - Strong CYP3A4/2C9 Inducer)",
+        12: "Rifampin / Rifampicin (Antibiotic - Potent CYP3A4/2C9 Inducer)",
+        13: "Carbamazepine / Tegretol (Anticonvulsant - Strong CYP3A4/2C9 Inducer)",
+        14: "Phenytoin / Phenobarbital (Anticonvulsants - Strong CYP3A4/2C9 Inducers)"
+    }
+    
+    selected_meds = set()
+    
+    print("\n" + "="*80)
+    print(" 💊 MEDICATION & SUBSTANCE INTERACTION QUESTIONNAIRE (CYP2C9 / CYP3A4)")
+    print("="*80)
+    print("THC clearance depends on hepatic enzymes. Select all active medications below.")
+    print("You can add multiple medications one by one. Enter 0 when finished.\n")
+    
+    for num, name in med_catalog.items():
+        print(f"   [{num:2d}] {name}")
+    print("   [ 0] Done / No more medications to add (Finish selection)")
+    print("-" * 80)
+    
+    while True:
+        current_selection_str = ", ".join(str(m) for m in sorted(selected_meds)) if selected_meds else "None"
+        print(f"\nCurrent Selection: [{current_selection_str}]")
+        raw_val = input("Enter medication number to add/remove (or 0 to finish): ").strip()
+        
+        if raw_val == "0" or raw_val == "":
+            break
+            
+        try:
+            choice = int(raw_val)
+            if choice in med_catalog:
+                if choice in selected_meds:
+                    selected_meds.remove(choice)
+                    print(f"➖ Removed: {med_catalog[choice]}")
+                else:
+                    selected_meds.add(choice)
+                    print(f"➕ Added: {med_catalog[choice]}")
+            else:
+                print("❌ Invalid number. Choose between 0 and 14.")
+        except ValueError:
+            print("❌ Invalid input. Please enter a valid number.")
+            
+    return list(selected_meds)
+
 
 if __name__ == "__main__":
     print("\n" + "="*80)
-    print("      YOUR PERSONAL THC CLEARANCE ESTIMATOR")
-    print("="*80 + "\n")
+    print(" 🌿 3-COMPARTMENT THC MODEL WITH DYNAMIC MEDICATION LOOP")
+    print("="*80)
+    print(" Tip: Type 'b' to go back at any prompt.\n")
 
-    gender = input("Gender (m/f/x) [Default: m]: ").strip().lower()
-    if gender not in ["m", "f", "x"]: gender = "m"
-    age = get_float("Age in years", 25.0)
-    weight = get_float("Weight in kg", 75.0)
-    body_fat = get_float("Body fat percentage (%)", 25.0 if gender == "f" else 15.0)
-    
-    activity = max(1, min(5, get_int("Activity Level (1=Sedentary, 3=Moderate, 5=Athlete)", 3)))
-    weight_trend = max(1, min(4, get_int("Weight Trend (1=Gaining, 2=Stable, 3=Losing slowly, 4=Rapid)", 2)))
-    
-    cyp_score = determine_cyp_score()
-    cbd = max(1, min(3, get_int("High CBD co-consumption? (1=Yes, 2=Some, 3=No)", 3)))
-    med_modifier = get_medication_modifier()
-    
-    source = max(1, min(2, get_int("Product Source (1=Pharmacy/Medical, 2=Black Market)", 1)))
-    thc_percent = get_float("Stated THC content in %", 15.0)
-    dose = get_float("Total consumed amount per day in grams", 1.0)
-    frequency = get_int("Distributed across how many sessions per day?", 3)
-    months = get_float("Duration of regular consumption (Months)", 12.0)
-    
-    method_map = {1: "smoking", 2: "vaping", 3: "oral"}
-    method = method_map.get(get_int("Method (1=Smoking, 2=Vaping, 3=Oral)", 1), "smoking")
-    
-    inhale_style = 2
-    if method in ["smoking", "vaping"]:
-        inhale_style = max(1, min(3, get_int("Inhalation (1=Shallow, 2=Normal, 3=Deep lung hold)", 2)))
-    
-    hours = get_float("\nHours since LAST consumption", 12.0)
+    prompts = [
+        # --- BIOMETRICS ---
+        {"key": "gender", "msg": "1. Biological Gender (m/f/x)", "type": "str", "default": "m"},
+        {"key": "age", "msg": "2. Age (years)", "type": "int", "default": 25},
+        {"key": "weight", "msg": "3. Weight (kg)", "type": "float", "default": 75.0},
+        {"key": "height", "msg": "4. Height (cm)", "type": "float", "default": 180.0},
+        {"key": "body_fat", "msg": "5. Body Fat % (Enter 0 for auto-estimate)", "type": "float", "default": 0.0},
+        
+        # --- LIFESTYLE ---
+        {"key": "activity", "msg": "6. General Activity Level (1: Sedentary, 3: Mod, 5: Athlete)", "type": "int", "default": 3, "min": 1, "max": 5},
+        {"key": "weight_trend", "msg": "7. Recent weight trend? (1: Losing, 2: Stable, 3: Gaining)", "type": "int", "default": 2, "min": 1, "max": 3},
+        {"key": "hydration", "msg": "8. Current Hydration (1: Dehydrated, 2: Normal, 3: Very Hydrated)", "type": "int", "default": 2, "min": 1, "max": 3},
+        {"key": "diet", "msg": "9. General Diet (1: High Fat/Keto, 2: Balanced, 3: Low Fat)", "type": "int", "default": 2, "min": 1, "max": 3},
+        
+        # --- CHRONIC HISTORY ---
+        {"key": "years", "msg": "10. Years of regular cannabis use?", "type": "float", "default": 3.0},
+        {"key": "days_wk", "msg": "11. Days per week used on average?", "type": "int", "default": 4, "min": 0, "max": 7},
+        {"key": "grams_day", "msg": "12. Grams per day (on usage days)?", "type": "float", "default": 0.5},
+        {"key": "break", "msg": "13. Longest T-Break in the last 6 months (in days)?", "type": "int", "default": 0},
+        {"key": "source", "msg": "14. Primary source (1: Medical/Dispensary, 2: Street/Homegrow)", "type": "int", "default": 1, "min": 1, "max": 2},
+        
+        # --- ACUTE SESSION DETAILS ---
+        {"key": "thc_pct", "msg": "15. Estimated THC content (%)?", "type": "float", "default": 20.0},
+        {"key": "cbd", "msg": "16. CBD content? (1: High 1:1, 2: Moderate, 3: Low/None)", "type": "int", "default": 3, "min": 1, "max": 3},
+        {"key": "method", "msg": "17. Method (1: Joint, 2: Bong, 3: Dry Vape, 4: Cartridge, 5: Edible, 6: Sublingual)", "type": "int", "default": 1, "min": 1, "max": 6},
+        {"key": "tobacco", "msg": "18. Mixed with tobacco/nicotine? (1: Yes, 2: No)", "type": "int", "default": 2, "min": 1, "max": 2},
+        {"key": "alcohol", "msg": "19. Consumed alcohol alongside this session? (1: Yes, 2: No)", "type": "int", "default": 2, "min": 1, "max": 2},
+        {"key": "dose", "msg": "20. Total amount consumed THIS session (grams/ml)?", "type": "float", "default": 0.3},
+        
+        # --- INHALATION MECHANICS ---
+        {"key": "drag", "msg": "21. Average puff size? (1: Small/Sips, 2: Normal, 3: Deep lung)", "type": "int", "default": 2, "min": 1, "max": 3},
+        {"key": "hold", "msg": "22. Smoke hold time? (1: Instant, 2: 1-2s, 3: 3-5s, 4: >5s)", "type": "int", "default": 2, "min": 1, "max": 4},
+        {"key": "duration", "msg": "23. Session duration in minutes?", "type": "float", "default": 10.0},
+        
+        # --- ENZYME PROXIES (CYP) ---
+        {"key": "high_dur", "msg": "24. Compared to friends, your high lasts: (1: Much longer -> 5: Much shorter)", "type": "int", "default": 3, "min": 1, "max": 5},
+        {"key": "edible", "msg": "25. Sensitivity to edibles? (1: Too intense, 3: Normal, 5: Barely feel them)", "type": "int", "default": 3, "min": 1, "max": 5},
+        {"key": "grogginess", "msg": "26. Next-day grogginess? (1: Always heavy, 3: Sometimes, 5: Never)", "type": "int", "default": 3, "min": 1, "max": 5},
+        {"key": "fasting", "msg": "27. Stomach status? (1: Fasted, 2: Normal, 3: High Fat Meal)", "type": "int", "default": 2, "min": 1, "max": 3},
+        
+        # --- MEDICATION INTERACTION LOOP ---
+        {"key": "med_list", "custom": "medication_loop"},
+        
+        {"key": "post_act", "msg": "29. Activity AFTER consuming? (1: Couch/Sleep, 2: Walking, 3: Heavy Gym)", "type": "int", "default": 1, "min": 1, "max": 3},
+    ]
 
-    def run_sim(h):
-        return calculate_thc_concentration(
-            gender, age, weight, body_fat, months, dose, thc_percent, source,
-            frequency, method, inhale_style, activity, cyp_score, cbd, med_modifier, weight_trend, h
-        )
+    answers = {}
+    i = 0
+    while i < len(prompts):
+        p = prompts[i]
+        
+        if p.get("custom") == "medication_loop":
+            answers["med_list"] = run_medication_questionnaire()
+            i += 1
+            continue
 
-    res_current = run_sim(hours)
+        user_input = input(f"{p['msg']} [Default: {p['default']}]: ").strip()
 
-    # --- Find exact time when THC drops below 3.5 ng/ml in a 30-day window ---
-    sub_35_mean, sub_35_low, sub_35_up = None, None, None
-    for test_h in range(int(hours), 30 * 24 + 1):
-        r = run_sim(float(test_h))
-        if sub_35_mean is None and r['Total_THC_ng_ml'] < 3.5: sub_35_mean = test_h
-        if sub_35_low is None and r['THC_CI_Lower'] < 3.5: sub_35_low = test_h
-        if sub_35_up is None and r['THC_CI_Upper'] < 3.5: sub_35_up = test_h
+        if user_input.lower() == 'b':
+            if i > 0:
+                i -= 1
+                print("\n" + "-"*40 + "\n ⏪ Going back...\n" + "-"*40)
+            continue
+
+        if user_input == "":
+            answers[p["key"]] = p["default"]; i += 1; continue
+
+        try:
+            if p["type"] == "str": answers[p["key"]] = user_input.lower()
+            elif p["type"] == "int":
+                val = int(user_input)
+                if "min" in p and (val < p["min"] or val > p["max"]): raise ValueError
+                answers[p["key"]] = val
+            elif p["type"] == "float": answers[p["key"]] = float(user_input.replace(",", "."))
+            i += 1 
+        except ValueError: print("❌ Invalid input. Try again.")
+
+    timeline, threshold_hour, rsd, cyp_phenotype, f, c0, base_c0, med_warnings = simulate_thc_clearance(
+        answers["gender"], answers["age"], answers["weight"], answers["height"], answers["body_fat"], 
+        answers["activity"], answers["weight_trend"], answers["hydration"], answers["diet"],
+        answers["years"], answers["days_wk"], answers["grams_day"], answers["break"], answers["source"],
+        answers["method"], answers["tobacco"], answers["alcohol"], answers["thc_pct"], answers["cbd"], 
+        answers["dose"], answers["drag"], answers["hold"], answers["duration"],
+        answers["high_dur"], answers["edible"], answers["grogginess"], answers["fasting"],
+        answers["med_list"], answers["post_act"]
+    )
 
     print("\n" + "="*80)
-    print(" YOUR ESTIMATED RESULTS")
+    print(" 🔬 3-COMPARTMENT ELIMINATION ANALYSIS")
     print("="*80)
+    print(f"Calculated Systemic Uptake (F): {round(f * 100, 1)}%")
+    print(f"Hepatic Clearance Phenotype:  {cyp_phenotype}/5.0 (CYP2C9/3A4 Proxy Score)")
+    print(f"Theoretical Initial Peak:     {round(c0, 1)} ng/ml (Pre-distribution)")
+    print(f"Chronic Lipid Baseline:       {round(base_c0, 2)} ng/ml (Floor level)")
     
-    print(f"\n💊 ACTIVE THC (Makes you high, causes impairment):")
-    print(f"Estimated Serum Level: {round(res_current['Total_THC_ng_ml'], 2)} ng/ml")
-    print(f"Likely Range (95% CI): {round(res_current['THC_CI_Lower'], 2)} to {round(res_current['THC_CI_Upper'], 2)} ng/ml")
+    if med_warnings:
+        print("\n ⚠️ ACTIVE PHARMACOLOGICAL INTERACTIONS DETECTED:")
+        for w in med_warnings:
+            print(f"    - {w}")
+
+    print("\n" + "="*80)
+    print(" 🚗 LEGAL DRIVING THRESHOLD (3.5 ng/ml)")
+    print("="*80)
+    if threshold_hour == -1.0:
+        print("🚨 WARNING: Your chronic lipid baseline is so high that you will not drop below 3.5 ng/ml within 30 days of abstinence.")
+    else:
+        days = math.floor(threshold_hour / 24)
+        hrs = threshold_hour % 24
+        
+        worst_case_hour = -1.0
+        for data in timeline:
+            if worst_case_hour == -1.0 and data["upper"] < 3.5:
+                worst_case_hour = data["hour"]
+                
+        print(f"✅ Expected Mean Clearance Time:  {days} days and {hrs} hours")
+        if worst_case_hour != -1.0:
+            wc_days = math.floor(worst_case_hour / 24)
+            wc_hrs = worst_case_hour % 24
+            print(f"🛡️ Worst-Case (95% CI Upper):    {wc_days} days and {wc_hrs} hours")
+        else:
+            print("🛡️ Worst-Case (95% CI Upper):    Exceeds 30 days due to chronic lipid storage.")
+
+    print("\n" + "="*80)
+    print(" 📉 CLEARANCE TIMELINE (Blood Serum Concentration)")
+    print("="*80)
+    print(f"{'Time Passed':<15} | {'Mean (ng/ml)':<12} | {'95% CI Range (ng/ml)':<20} | {'Status'}")
+    print("-" * 80)
     
-    print("\n🚗 GERMAN DRIVING LIMIT (3.5 ng/ml) - Time to reach:")
-    if sub_35_mean: print(f"   • Expected Mean: ~{round(sub_35_mean/24.0, 1)} days ({sub_35_mean} hours)")
-    else: print("   • Expected Mean: Not reached within 30 days.")
+    checkpoints = [1.0, 2.0, 4.0, 8.0, 12.0, 24.0, 48.0, 72.0, 168.0, 336.0]
     
-    if sub_35_low:  print(f"   • Best Case (Lower CI): ~{round(sub_35_low/24.0, 1)} days")
-    if sub_35_up:   print(f"   • Worst Case (Upper CI): ~{round(sub_35_up/24.0, 1)} days")
-    elif not sub_35_mean: print("   • Worst Case: Not reached within 30 days.")
-
-    print(f"\n📊 Model Statistics & Predictivity:")
-    print(f"   • Inter-Individual Variability (\u03C3): {round(res_current['RSD_Applied'], 1)}%")
-    print(f"   • Model Predictivity (R\u00B2 Equivalent): \u2248 0.60 - 0.65")
-
-    # --- MATPLOTLIB CHART GENERATION ---
-    print("\nGenerating your personal interactive chart... Close the window to end.")
-    
-    days = []
-    thc_vals, thc_low, thc_high = [], [], []
-    cooh_vals, cooh_low, cooh_high = [], [], []
-    
-    # Calculate points every 6 hours up to 30 days for better resolution
-    for h in range(0, 30 * 24 + 1, 6):
-        res = run_sim(h)
-        days.append(h / 24.0)
-        thc_vals.append(res['Total_THC_ng_ml'])
-        thc_low.append(res['THC_CI_Lower'])
-        thc_high.append(res['THC_CI_Upper'])
-        cooh_vals.append(res['THC_COOH_Metabolite_ng_ml'])
-        cooh_low.append(res['COOH_CI_Lower'])
-        cooh_high.append(res['COOH_CI_Upper'])
-
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
-    fig.canvas.manager.set_window_title('Your Personal THC Clearance Journey (30 Days)')
-
-    # Subplot 1: Active THC
-    ax1.plot(days, thc_vals, label="Active THC (Mean)", color="#d62728", linewidth=2)
-    ax1.fill_between(days, thc_low, thc_high, color="#d62728", alpha=0.2, label="95% Confidence Interval (Bounds)")
-    ax1.axhline(y=3.5, color='orange', linestyle='--', linewidth=2, label="German Driving Limit (3.5 ng/ml)")
-    
-    if sub_35_mean:
-        ax1.axvline(x=sub_35_mean/24.0, color='green', linestyle=':', linewidth=2, label=f"Mean Reached (~{round(sub_35_mean/24.0, 1)}d)")
-
-    ax1.set_ylabel("ng/ml (Blood Serum)")
-    ax1.set_title("Active THC, Confidence Intervals & German Driving Limit (30 Days)")
-    ax1.grid(True, linestyle="--", alpha=0.6)
-    ax1.legend(loc='upper right', fontsize=9)
-    
-    max_thc = max(thc_vals[1:]) if len(thc_vals) > 1 else max(thc_vals)
-    ax1.set_ylim(0, max(10.0, max_thc * 1.2))
-
-    # Subplot 2: THC-COOH
-    ax2.plot(days, cooh_vals, label="Inactive Metabolite (Mean)", color="#1f77b4", linewidth=2)
-    ax2.fill_between(days, cooh_low, cooh_high, color="#1f77b4", alpha=0.2, label="95% Confidence Interval (Bounds)")
-    ax2.set_xlabel("Days since you stopped")
-    ax2.set_ylabel("ng/ml (Blood Serum)")
-    ax2.set_title("Inactive Metabolite (THC-COOH) Over 30 Days")
-    ax2.grid(True, linestyle="--", alpha=0.6)
-    ax2.legend(loc='upper right', fontsize=9)
-    ax2.set_xlim(0, 30)
-    ax2.set_ylim(0, max(cooh_vals) * 1.2)
-
-    plt.tight_layout()
-    plt.show()
+    for data in timeline:
+        t = data["hour"]
+        if t in checkpoints or t == threshold_hour:
+            conc = data["conc"]
+            low = data["lower"]
+            high = data["upper"]
+            
+            if t < 24: t_str = f"+ {t} hours"
+            else: t_str = f"+ {t/24} days"
+            
+            if conc >= 3.5: status = "🔴 Impaired / Illegal"
+            elif high >= 3.5: status = "🟡 Legal, but CI risks failing"
+            elif conc >= 1.0: status = "🟢 Legal (Trace detectable)"
+            else: status = "⚪ Completely Cleared"
+            
+            marker = " <== THRESHOLD CROSSED" if t == threshold_hour else ""
+            
+            print(f"{t_str:<15} | {round(conc, 2):<12} | {round(low, 2)} - {round(high, 2):<14} | {status}{marker}")
+            
+    print("-" * 80 + "\n")
